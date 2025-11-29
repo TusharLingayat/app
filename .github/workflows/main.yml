@@ -1,4 +1,4 @@
-name: CI-CD Auto Deploy to Kubernetes
+name: Auto CI/CD Deploy to Kubernetes
 
 on:
   push:
@@ -6,47 +6,50 @@ on:
       - main
 
 jobs:
-  deploy:
-    runs-on: self-hosted
+  build-push-deploy:
+    runs-on: self-hosted     # your runner on EC2 that has kubectl + docker installed
 
     steps:
+      # 1. Checkout Code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Login to Docker Hub
+      # 2. Login to Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Build & Push image
-      - name: Build & Push Docker Image
+      # 3. Set IMAGE TAG using latest commit SHA
+      - name: Set Image Tag
+        id: vars
+        run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      # 4. Build and Push Docker Image
+      - name: Build and Push Docker Image
         run: |
-          IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/restorent
-          TAG=$(date +%s)
-          echo "TAG=${TAG}" >> $GITHUB_ENV
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/restorent-app:${{ steps.vars.outputs.IMAGE_TAG }} .
+          docker push ${{ secrets.DOCKER_USERNAME }}/restorent-app:${{ steps.vars.outputs.IMAGE_TAG }}
 
-          docker build -t $IMAGE_NAME:$TAG .
-          docker push $IMAGE_NAME:$TAG
-
-      # Create kubeconfig
-      - name: Configure kubeconfig
+      # 5. Update Image in Kubernetes Deployment
+      - name: Update Kubernetes Deployment Image
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+          kubectl set image deployment/restorent-app \
+          restorent-app=${{ secrets.DOCKER_USERNAME }}/restorent-app:${{ steps.vars.outputs.IMAGE_TAG }} \
+          --namespace default
 
-   
+      # 6. Verify Deployment rollout
+      - name: Verify rollout
+        run: kubectl rollout status deployment/restorent-app --namespace default
 
-      # Update image in Deployment
-      - name: Deploy to Kubernetes
+      # 7. (Optional) Expose service so it's accessible externally
+      - name: Expose Service (Only runs once if not existing)
         run: |
-          IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/restorent-app
-          kubectl set image deployment/restorent-app tusharlingayat=$IMAGE_NAME:${TAG}
-
-      # Verify Deployment
-      - name: Verify Deployment
-        run: |
-          kubectl rollout status deployment/restorent-app
-          kubectl get pods -o wide
-          kubectl get svc restorent-service -o wide
+          if ! kubectl get service restorent-service; then
+            kubectl expose deployment restorent-app \
+            --type=LoadBalancer \
+            --port=80 \
+            --target-port=8080 \
+            --name=restorent-service
+          fi
