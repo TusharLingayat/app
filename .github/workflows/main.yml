@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-push-deploy:
-    runs-on: self-hosted     # your runner on EC2 that has kubectl + docker installed
+    runs-on: self-hosted
 
     steps:
       # 1. Checkout Code
@@ -21,35 +21,43 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 3. Set IMAGE TAG using latest commit SHA
+      # 3. Set IMAGE TAG
       - name: Set Image Tag
         id: vars
         run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
-      # 4. Build and Push Docker Image
+      # 4. Build & Push Image
       - name: Build and Push Docker Image
         run: |
           docker build -t ${{ secrets.DOCKER_USERNAME }}/restorent-app:${{ steps.vars.outputs.IMAGE_TAG }} .
           docker push ${{ secrets.DOCKER_USERNAME }}/restorent-app:${{ steps.vars.outputs.IMAGE_TAG }}
 
-      # 5. Update Image in Kubernetes Deployment
+      # 5. Get container name dynamically from Kubernetes
+      - name: Get Container Name
+        id: cname
+        run: |
+          cname=$(kubectl get deployment restorent-app -o jsonpath='{.spec.template.spec.containers[0].name}')
+          echo "CONTAINER_NAME=$cname" >> $GITHUB_OUTPUT
+
+      # 6. Update Kubernetes Deployment with new image
       - name: Update Kubernetes Deployment Image
         run: |
           kubectl set image deployment/restorent-app \
-          restorent-app=${{ secrets.DOCKER_USERNAME }}/restorent-app:${{ steps.vars.outputs.IMAGE_TAG }} \
+          ${{ steps.cname.outputs.CONTAINER_NAME }}=${{ secrets.DOCKER_USERNAME }}/restorent-app:${{ steps.vars.outputs.IMAGE_TAG }} \
           --namespace default
 
-      # 6. Verify Deployment rollout
+      # 7. Verify rollout
       - name: Verify rollout
         run: kubectl rollout status deployment/restorent-app --namespace default
 
-      # 7. (Optional) Expose service so it's accessible externally
-      - name: Expose Service (Only runs once if not existing)
+      # 8. Expose service if not exists
+      - name: Expose Service (Only runs once)
         run: |
-          if ! kubectl get service restorent-service; then
+          if ! kubectl get service restorent-service --namespace default; then
             kubectl expose deployment restorent-app \
-            --type=LoadBalancer \
-            --port=80 \
-            --target-port=8080 \
-            --name=restorent-service
+              --type=LoadBalancer \
+              --port=80 \
+              --target-port=8080 \
+              --name=restorent-service \
+              --namespace default
           fi
