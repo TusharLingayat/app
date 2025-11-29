@@ -42,7 +42,7 @@ jobs:
       - name: Deploy to Kubernetes
         run: |
           IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/restorent-app
-          kubectl set image deployment/restorent-app restorent-app=$IMAGE_NAME:${TAG}
+          kubectl set image deployment/restorent-app tusharlingayat=$IMAGE_NAME:${TAG}
 
       # Verify Deployment
       - name: Verify Deployment
